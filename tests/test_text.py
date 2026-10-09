@@ -1,4 +1,4 @@
-from toggrag.text import stem, tokenize, turkish_lower
+from toggrag.text import analyze, stem, tokenize, turkish_lower
 
 
 def test_dotted_and_dotless():
@@ -35,12 +35,14 @@ def test_stem_reduces_noun_suffixes():
     assert stem("araçlar") == "araç"
 
 
-def test_stem_lowercases_before_stemming():
-    # The stemmer ignores uppercase suffixes, so stem() must lowercase first.
-    assert stem("ARAÇLAR") == "araç"
-    assert stem("Araçlar") == "araç"
-
-
 def test_stem_leaves_unrecognised_verb_forms_unchanged():
     # Documents a known limitation of the Snowball Turkish stemmer.
     assert stem("ayarlanır") == "ayarlanır"
+
+
+def test_analyze_tokenizes_and_stems():
+    assert analyze("Lastikler ve KAPILAR") == ["lastik", "ve", "kapı"]
+
+
+def test_analyze_empty_string_returns_empty_list():
+    assert analyze("") == []

@@ -18,9 +18,16 @@ def tokenize(text: str) -> list[str]:
 
 
 def stem(word: str) -> str:
-    """Lowercase, then reduce a Turkish word to its stem.
+    """Reduce a Turkish word to its stem.
 
     Snowball handles noun suffixes well (ayarlar -> ayar) but leaves many verb
     forms unchanged (ayarlanır stays ayarlanır).
+    Input must be lowercase: uppercase words are returned unstemmed.
+    analyze() guarantees this.
     """
-    return _STEM.stemWord(turkish_lower(word))
+    return _STEM.stemWord(word)
+
+
+def analyze(text: str) -> list[str]:
+    """Tokenize, lowercase and stem text. Use for both indexing and queries."""
+    return [stem(word) for word in tokenize(text)]
