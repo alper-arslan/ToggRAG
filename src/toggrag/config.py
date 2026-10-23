@@ -2,7 +2,7 @@ import pathlib
 from typing import Literal
 
 import dotenv
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -10,11 +10,7 @@ from pydantic_settings import (
     YamlConfigSettingsSource,
 )
 
-
-class StrictModel(BaseModel):
-    """Base for all config sections: unknown keys raise instead of being ignored."""
-
-    model_config = ConfigDict(extra="forbid")
+from toggrag.shared import StrictModel
 
 
 class ChunkingConfig(StrictModel):
