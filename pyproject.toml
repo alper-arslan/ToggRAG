@@ -5,6 +5,7 @@ requires-python = ">=3.14"
 dependencies = [
     "pydantic>=2.13.5",
     "pydantic-settings>=2.15.0",
+    "pymupdf>=2.0",
     "python-dotenv>=1.2.4",
     "pyyaml>=6.0.3",
     "snowballstemmer>=3.1.1",

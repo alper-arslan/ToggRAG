@@ -1,4 +1,4 @@
-pdf_path: data/manual.pdf #TODO: Change this with the actual file name.
+pdf_path: data/manual.pdf
 data_dir: data
 
 chunking:
