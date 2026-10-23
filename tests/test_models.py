@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from toggrag.models import Chunk
+from toggrag.models import Chunk, Heading, Page
 
 
 @pytest.fixture
@@ -66,3 +66,35 @@ class TestChunk:
                 content_type="table",
                 extra_field="This should raise ValidationError",
             )
+
+
+def test_pages():
+    # pages should be positive integer
+    with pytest.raises(ValidationError):
+        Page(text="Some text", page=0)
+    with pytest.raises(ValidationError):
+        Page(text="Some text", page=-1)
+    # should accept empty text
+    page = Page(text="", page=13)
+    assert page.text == ""
+    # happy path
+    page = Page(text="Some text", page=13)
+    assert page.text == "Some text"
+    assert page.page == 13
+
+
+def test_page_headers():
+    # level should be positive integer
+    with pytest.raises(ValidationError):
+        Heading(level=0, title="Some Title", page=13)
+    with pytest.raises(ValidationError):
+        Heading(level=-1, title="Some Title", page=13)
+    # Empty title rejected
+    with pytest.raises(ValidationError):
+        Heading(level=1, title="", page=13)
+
+    # Happy path
+    heading = Heading(level=3, title="Some Title", page=13)
+    assert heading.level == 3
+    assert heading.title == "Some Title"
+    assert heading.page == 13
