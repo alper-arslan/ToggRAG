@@ -31,3 +31,20 @@ def stem(word: str) -> str:
 def analyze(text: str) -> list[str]:
     """Tokenize, lowercase and stem text. Use for both indexing and queries."""
     return [stem(word) for word in tokenize(text)]
+
+
+def clean_page_text(text: str, page: int) -> str:
+    kept = []
+    in_labels = False
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("TG") and line.removesuffix("_T")[2:].isdigit():
+            in_labels = True
+        elif in_labels and line.replace(" ", "").isdigit():
+            pass
+        else:
+            in_labels = False
+            kept.append(line)
+    if kept and kept[-1] == str(page):
+        kept.pop()
+    return "\n".join(kept)
