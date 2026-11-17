@@ -21,6 +21,12 @@ Pipeline: parse PDF -> clean -> chunk -> embed -> Qdrant + BM25 -> hybrid retrie
 - `data/` is gitignored; the manual goes in `data/manual.pdf`, the built index is written next to it.
 - `Dockerfile` and `docker-compose.yml` serve the chat page; run `toggrag ingest` on the host first.
 
+## Git rules
+
+- Ask the user before every `git push` and before opening a PR; approval for one push does not cover the next.
+- Before creating a PR, run the `code-reviewer` subagent (`.claude/agents/code-reviewer.md`) on the branch, show the user its findings, and fix or explain each Must fix item first.
+- Check `git branch --show-current` before changing anything; stage files by name; no attribution lines in commits or PRs.
+
 ## Setup
 
 - Python >=3.14, managed with uv. Use `uv sync`, `uv add <pkg>` (`--dev` for tooling) and `uv run <cmd>`; don't use pip directly.
