@@ -19,8 +19,10 @@ class Chunk(StrictModel):
     section_path: list[str] = Field(
         description="Heading hierarchy from chapter down to subsection"
     )
-    content_type: Literal["procedure", "warning", "specification", "table"] = Field(
-        description="Kind of content, used to boost procedures for how-to questions"
+    content_type: Literal["procedure", "warning", "specification", "table", "text"] = (
+        Field(
+            description="Kind of content, used to boost procedures for how-to questions"
+        )
     )
 
 
