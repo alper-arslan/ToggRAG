@@ -25,6 +25,13 @@ def test_find_heading_ignores_titles_inside_a_line():
     assert find_heading("2.1 Güvenlik", "bkz. 2.1 Güvenlik") is None
 
 
+def test_find_heading_does_not_match_a_longer_title():
+    text = "2.1 Güvenlik Talimatları\nMetin\n2.1 Güvenlik\nSon"
+    match = find_heading("2.1 Güvenlik", text)
+    assert match is not None
+    assert text[match.end() :] == "\nSon"
+
+
 def test_find_heading_searches_from_start():
     text = "2.1 Güvenlik\nMetin\n2.1 Güvenlik"
     match = find_heading("2.1 Güvenlik", text, start=1)
@@ -149,6 +156,13 @@ def test_pack_blocks_repeats_tail_as_overlap():
     blocks = _blocks(4, 4, 4)
     chunks = pack_blocks(blocks, target_tokens=10, overlap_tokens=4)
     assert chunks == [[blocks[0], blocks[1]], [blocks[1], blocks[2]]]
+
+
+def test_pack_blocks_overlap_never_pushes_a_chunk_past_the_target():
+    blocks = _blocks(4, 4, 8)
+    chunks = pack_blocks(blocks, target_tokens=10, overlap_tokens=4)
+    sizes = [sum(len(b.text.split()) for b in chunk) for chunk in chunks]
+    assert all(size <= 10 for size in sizes)
 
 
 def test_classify_warning():

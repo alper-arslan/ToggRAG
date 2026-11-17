@@ -30,13 +30,14 @@ class Section:
 
 
 def find_heading(title: str, text: str, start: int = 0) -> re.Match[str] | None:
-    """Find a heading at the start of a line, even if the PDF wrapped it.
+    """Find a heading that fills its line(s), even if the PDF wrapped it.
 
-    Whitespace is ignored, so "3.1.3 Kaybolması/Değiştirilmesi" also matches
+    A longer title that only starts with the same words ("2.1 Güvenlik Talimatları"
+    for "2.1 Güvenlik") does not match. Whitespace inside the title is ignored, so "3.1.3 Kaybolması/Değiştirilmesi" also matches
     "3.1.3 Kaybolması/\\nDeğiştirilmesi".
     """
     letters = [re.escape(char) for char in title if not char.isspace()]
-    pattern = re.compile(r"^" + r"\s*".join(letters), re.MULTILINE)
+    pattern = re.compile(r"^" + r"\s*".join(letters) + r"[ \t]*$", re.MULTILINE)
     return pattern.search(text, start)
 
 
@@ -141,6 +142,8 @@ def pack_blocks(
 
     When a chunk is full the next one starts with the last blocks of the
     previous one (up to overlap_tokens) so a step at the border is not lost.
+    The overlap is cut back so it never pushes the chunk past the target; a
+    single block bigger than the target stays whole.
     """
     chunks: list[list[Block]] = []
     current: list[Block] = []
@@ -149,7 +152,7 @@ def pack_blocks(
         n = _tokens([block])
         if current and size + n > target_tokens:
             chunks.append(current)
-            current = _overlap_tail(current, overlap_tokens)
+            current = _overlap_tail(current, min(overlap_tokens, target_tokens - n))
             size = _tokens(current)
         current.append(block)
         size += n
