@@ -5,12 +5,56 @@ import httpx
 from toggrag.config import Settings
 
 _ANTHROPIC_URL = "https://api.anthropic.com"
+_OLLAMA_URL = "http://localhost:11434"
+_OPENAI_URL = "https://api.openai.com/v1"
 
 
 class LLM(Protocol):
     """A chat model: one system prompt and one user message in, text out."""
 
     def complete(self, system: str, user: str) -> str: ...
+
+
+class OllamaLLM:
+    """Ollama's native chat endpoint.
+
+    Used instead of its OpenAI-compatible one because only the native API lets
+    each request set the context window (num_ctx). Ollama's default window is
+    2048 tokens, and a longer prompt is cut at the start without any error.
+    """
+
+    def __init__(
+        self,
+        model: str,
+        base_url: str,
+        context_window: int,
+        temperature: float,
+        max_tokens: int,
+        client: httpx.Client | None = None,
+    ) -> None:
+        self._model = model
+        self._options = {
+            "num_ctx": context_window,
+            "temperature": temperature,
+            "num_predict": max_tokens,
+        }
+        self._client = client or httpx.Client(base_url=base_url, timeout=300)
+
+    def complete(self, system: str, user: str) -> str:
+        response = self._client.post(
+            "/api/chat",
+            json={
+                "model": self._model,
+                "stream": False,
+                "options": self._options,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            },
+        )
+        response.raise_for_status()
+        return response.json()["message"]["content"]
 
 
 class OpenAICompatibleLLM:
@@ -101,13 +145,21 @@ def make_llm(settings: Settings) -> LLM:
             config.max_tokens,
             settings.anthropic_api_key.get_secret_value(),
         )
+    if config.provider == "ollama":
+        return OllamaLLM(
+            config.model,
+            config.base_url or _OLLAMA_URL,
+            config.context_window,
+            config.temperature,
+            config.max_tokens,
+        )
     key = settings.openai_api_key
-    if config.provider == "openai" and key is None:
+    if key is None:
         raise ValueError("OPENAI_API_KEY is not set")
     return OpenAICompatibleLLM(
         config.model,
-        config.base_url,
+        config.base_url or _OPENAI_URL,
         config.temperature,
         config.max_tokens,
-        key.get_secret_value() if key else None,
+        key.get_secret_value(),
     )

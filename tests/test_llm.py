@@ -4,7 +4,28 @@ import httpx
 import pytest
 
 from toggrag.config import Settings
-from toggrag.llm import AnthropicLLM, OpenAICompatibleLLM, make_llm
+from toggrag.llm import AnthropicLLM, OllamaLLM, OpenAICompatibleLLM, make_llm
+
+
+def test_ollama_sends_context_window_and_reads_reply():
+    def handler(request):
+        body = json.loads(request.content)
+        assert request.url.path == "/api/chat"
+        assert body["stream"] is False
+        assert body["options"] == {
+            "num_ctx": 8192,
+            "temperature": 0.0,
+            "num_predict": 100,
+        }
+        assert body["messages"][0] == {"role": "system", "content": "sys"}
+        assert body["messages"][1] == {"role": "user", "content": "soru"}
+        return httpx.Response(200, json={"message": {"content": "yanıt"}})
+
+    client = httpx.Client(
+        base_url="http://ollama", transport=httpx.MockTransport(handler)
+    )
+    llm = OllamaLLM("m", "http://ollama", 8192, 0.0, 100, client=client)
+    assert llm.complete("sys", "soru") == "yanıt"
 
 
 def test_openai_compatible_sends_messages_and_reads_reply():
@@ -62,4 +83,9 @@ def test_make_llm_requires_openai_key():
 
 
 def test_make_llm_builds_ollama_without_a_key():
-    assert isinstance(make_llm(_settings()), OpenAICompatibleLLM)
+    assert isinstance(make_llm(_settings()), OllamaLLM)
+
+
+def test_make_llm_uses_the_openai_adapter_for_openai():
+    settings = _settings(llm={"provider": "openai", "model": "m"}, openai_api_key="k")
+    assert isinstance(make_llm(settings), OpenAICompatibleLLM)

@@ -58,8 +58,11 @@ Any setting can also be overridden by an environment variable, e.g.
   `[n]` citations and a fixed refusal sentence when the manual has no answer.
   Citations are parsed from the answer and checked against the retrieved
   chunks; if retrieval finds nothing the LLM is not called at all (token saving).
-- **Local first, model agnostic.** Default is Ollama; the LLM adapters speak the
-  OpenAI chat format (Ollama, OpenAI, vLLM...) or the Anthropic Messages API.
+- **Local first, model agnostic.** Default is Ollama through its native chat
+  API; other adapters speak the OpenAI chat format (OpenAI, vLLM...) or the
+  Anthropic Messages API. Ollama's default context window is 2048 tokens and it
+  silently cuts the start of a longer prompt, so `llm.context_window` (default
+  8192) is sent with every request. Five chunks plus the rules need about 4.7k.
 - **Qdrant in local mode.** No server to run; the same code works against a
   Qdrant server later.
 

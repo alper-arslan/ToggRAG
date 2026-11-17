@@ -27,7 +27,8 @@ retrieval:
 llm:
   provider: ollama
   model: qwen2.5:7b
-  base_url: http://localhost:11434/v1
+  base_url: http://localhost:11434
+  context_window: 8192     # Ollama defaults to 2048, too small for 5 chunks
   temperature: 0.0
   max_tokens: 1024
 
