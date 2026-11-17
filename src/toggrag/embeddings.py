@@ -45,7 +45,7 @@ class SentenceTransformerEmbedder:
             from sentence_transformers import SentenceTransformer
         except ImportError as error:
             raise ImportError(
-                "sentence-transformers is not installed; run `uv sync --extra local`"
+                "sentence-transformers is not installed; run `uv sync --extra rerank`"
             ) from error
         self._model = SentenceTransformer(model)
 
