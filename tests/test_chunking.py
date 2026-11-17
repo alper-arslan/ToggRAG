@@ -6,6 +6,7 @@ from toggrag.chunking import (
     classify,
     contextual_text,
     find_heading,
+    mark_callouts,
     merge_sections,
     pack_blocks,
     split_blocks,
@@ -53,6 +54,14 @@ def test_split_blocks_starts_new_block_at_list_items():
 def test_split_blocks_starts_new_block_at_callout_header():
     blocks = split_blocks(1, "Metin devam\nDİKKAT\nDikkatli olun")
     assert [b.text for b in blocks] == ["Metin devam", "DİKKAT\nDikkatli olun"]
+
+
+def test_split_blocks_keeps_all_sentences_of_a_list_item_together():
+    blocks = split_blocks(1, "1. Aracı durdurun.\nMotoru tamamen kapatın.\n2. Çıkın.")
+    assert [b.text for b in blocks] == [
+        "1. Aracı durdurun.\nMotoru tamamen kapatın.",
+        "2. Çıkın.",
+    ]
 
 
 def test_split_blocks_splits_after_sentence_end_only():
@@ -103,6 +112,14 @@ def test_build_sections_sets_path_and_pages():
 def test_build_sections_removes_page_number_noise():
     sections = build_sections(_pages(), _headings())
     assert all(b.text != "3" for b in sections[-1].blocks)
+
+
+def test_build_sections_without_headings_keeps_all_text_in_one_section():
+    sections = build_sections(_pages(), [])
+    assert len(sections) == 1
+    assert sections[0].path == []
+    assert any("Giriş metni." in b.text for b in sections[0].blocks)
+    assert sections[0].blocks[0].page == 1
 
 
 def test_build_sections_keeps_heading_that_is_not_found_in_text():
@@ -165,8 +182,28 @@ def test_pack_blocks_overlap_never_pushes_a_chunk_past_the_target():
     assert all(size <= 10 for size in sizes)
 
 
+def test_mark_callouts_flags_header_and_items_under_it():
+    blocks = [
+        Block(1, "Metin devam."),
+        Block(1, "DİKKAT"),
+        Block(1, "▪ Kemer takın."),
+        Block(1, "Normal paragraf."),
+    ]
+    mark_callouts(blocks)
+    assert [b.callout for b in blocks] == [False, True, True, False]
+
+
 def test_classify_warning():
     blocks = [Block(1, "DİKKAT"), Block(1, "▪ Kemer takın."), Block(1, "▪ Yavaşlayın.")]
+    mark_callouts(blocks)
+    assert classify(blocks) == "warning"
+
+
+def test_classify_warning_chunk_that_starts_after_the_callout_header():
+    blocks = [Block(1, "▪ Kemer takın."), Block(1, "▪ Yavaşlayın.")]
+    assert classify(blocks) == "procedure"
+    for block in blocks:
+        block.callout = True
     assert classify(blocks) == "warning"
 
 
@@ -189,6 +226,13 @@ def test_chunk_document_builds_chunks_with_pages_and_path():
     assert chunks[0].section_path == ["1 Giriş"]
     assert chunks[0].pages == [2, 3]
     assert chunks[1].section_path == ["2 İkinci"]
+
+
+def test_chunk_document_without_headings_still_returns_chunks():
+    chunks = chunk_document(_pages(), [], ChunkingConfig(target_tokens=100))
+    assert chunks
+    assert all(c.section_path == [] for c in chunks)
+    assert contextual_text(chunks[0]) == chunks[0].text
 
 
 def test_contextual_text_puts_section_path_first():

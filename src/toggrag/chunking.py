@@ -19,6 +19,7 @@ class Block:
 
     page: int
     text: str
+    callout: bool = False
 
 
 @dataclass
@@ -41,18 +42,21 @@ def find_heading(title: str, text: str, start: int = 0) -> re.Match[str] | None:
     return pattern.search(text, start)
 
 
-def _starts_block(line: str, previous: str) -> bool:
+def _starts_block(line: str, current: list[str]) -> bool:
     if _ITEM.match(line) or (line.isupper() and len(line) <= _MAX_HEADER_LENGTH):
         return True
-    return previous.endswith(_SENTENCE_END) and line[0].isupper()
+    if _ITEM.match(current[0]):
+        return False
+    return current[-1].endswith(_SENTENCE_END) and line[0].isupper()
 
 
 def split_blocks(page: int, text: str) -> list[Block]:
     """Group the hard-wrapped lines of a page into blocks.
 
     The PDF has no blank lines between paragraphs, so a new block starts at a
-    list item, at an all-caps header such as DİKKAT, and after a line that ends a
-    sentence. Chunks are only cut between blocks, so an item is never cut in half.
+    list item, at an all-caps header such as DİKKAT, and, outside list items,
+    after a line that ends a sentence. A list item keeps all its sentences.
+    Chunks are only cut between blocks, so an item is never cut in half.
     """
     blocks: list[Block] = []
     current: list[str] = []
@@ -60,7 +64,7 @@ def split_blocks(page: int, text: str) -> list[Block]:
         line = line.strip()
         if not line:
             continue
-        if current and _starts_block(line, current[-1]):
+        if current and _starts_block(line, current):
             blocks.append(Block(page, "\n".join(current)))
             current = []
         current.append(line)
@@ -74,8 +78,17 @@ def build_sections(pages: list[Page], headings: list[Heading]) -> list[Section]:
 
     A heading that cannot be found in the page text still opens a section at the
     current position. Text before the first heading (cover, table of contents)
-    belongs to no section and is dropped.
+    belongs to no section and is dropped. Without any headings (a PDF with no
+    bookmarks) the whole document becomes one section with an empty path.
     """
+    if not headings:
+        blocks = [
+            block
+            for page in pages
+            for block in split_blocks(page.page, clean_page_text(page.text, page.page))
+        ]
+        return [Section([], blocks)]
+
     by_page: dict[int, list[Heading]] = defaultdict(list)
     for heading in headings:
         by_page[heading.page].append(heading)
@@ -126,7 +139,7 @@ def merge_sections(
     for section in sections:
         if groups:
             paths, blocks = groups[-1]
-            same_chapter = paths[0][0] == section.path[0]
+            same_chapter = paths[0][:1] == section.path[:1]
             if same_chapter and _tokens(blocks + section.blocks) <= target_tokens:
                 paths.append(section.path)
                 blocks += section.blocks
@@ -172,26 +185,34 @@ def _overlap_tail(blocks: list[Block], overlap_tokens: int) -> list[Block]:
     return tail
 
 
-def classify(blocks: list[Block]) -> str:
-    """Guess what kind of content a chunk holds.
+def mark_callouts(blocks: list[Block]) -> None:
+    """Flag the blocks that belong to a callout: the header and the items under it.
 
-    warning: mostly callout text (UYARI/DİKKAT and the items under them);
-    specification: mostly numbers (list numbering excluded); procedure: two or more list items;
-    text: everything else.
+    Done on the whole section before packing, so a chunk that starts in the
+    middle of a callout still knows it is a warning.
     """
-    total = _tokens(blocks) or 1
     in_callout = False
-    callout_tokens = 0
-    items = 0
     for block in blocks:
         first_line = block.text.splitlines()[0]
         if first_line in _CALLOUTS:
             in_callout = True
         elif not _ITEM.match(first_line):
             in_callout = False
-        if in_callout:
-            callout_tokens += _tokens([block])
-        items += sum(bool(_ITEM.match(line)) for line in block.text.splitlines())
+        block.callout = in_callout
+
+
+def classify(blocks: list[Block]) -> str:
+    """Guess what kind of content a chunk holds.
+
+    warning: mostly callout text (see mark_callouts);
+    specification: mostly numbers (list numbering excluded); procedure: two or more list items;
+    text: everything else.
+    """
+    total = _tokens(blocks) or 1
+    callout_tokens = _tokens([block for block in blocks if block.callout])
+    items = sum(
+        bool(_ITEM.match(line)) for block in blocks for line in block.text.splitlines()
+    )
     words = [
         word
         for block in blocks
@@ -215,6 +236,7 @@ def chunk_document(
     chunks: list[Chunk] = []
     sections = build_sections(pages, headings)
     for path, blocks in merge_sections(sections, config.target_tokens):
+        mark_callouts(blocks)
         for group in pack_blocks(blocks, config.target_tokens, overlap_tokens):
             chunks.append(
                 Chunk(
@@ -230,4 +252,6 @@ def chunk_document(
 
 def contextual_text(chunk: Chunk) -> str:
     """Text to embed and index: the section path in front of the chunk text."""
+    if not chunk.section_path:
+        return chunk.text
     return " > ".join(chunk.section_path) + "\n" + chunk.text
