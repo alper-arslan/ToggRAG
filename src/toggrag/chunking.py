@@ -1,3 +1,4 @@
+import logging
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -6,22 +7,36 @@ from toggrag.config import ChunkingConfig
 from toggrag.models import Chunk, Heading, Page
 from toggrag.text import clean_page_text, tokenize
 
-_ITEM = re.compile(r"^(?:[▪•●■\-–]|\d+[.)])\s")
+_ITEM = re.compile(r"^(?:[▪•●■\-–]|\d{1,2}[.)])\s")
 _SENTENCE_END = (".", ":", "!", "?")
 _CALLOUTS = {"UYARI", "DİKKAT", "TEHLİKE", "İKAZ"}
+_MIN_HEADER_LENGTH = 3
 _MAX_HEADER_LENGTH = 30
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
 class Block:
     """A run of lines that stay together: a list item, a callout header, a paragraph.
 
-    A block that runs over a page break lists every page it touches.
+    A block that runs over a page break lists every page it touches and, in
+    `line_pages`, the page of each line, so a piece cut from it can cite only
+    the pages it really covers (`line_pages` stays empty unless the block was
+    joined across pages). `heading` marks the line that opens a section.
     """
 
     pages: list[int]
     text: str
     callout: bool = False
+    heading: bool = False
+    line_pages: list[int] = field(default_factory=list)
+
+    def pages_of(self, first: int, last: int) -> list[int]:
+        """Pages of the lines first..last-1 (all pages if `line_pages` is empty)."""
+        if not self.line_pages:
+            return list(self.pages)
+        return sorted(set(self.line_pages[first:last]))
 
 
 @dataclass
@@ -45,9 +60,12 @@ def find_heading(title: str, text: str, start: int = 0) -> re.Match[str] | None:
 
 
 def _starts_block(line: str, current: list[str]) -> bool:
-    if _ITEM.match(line) or (line.isupper() and len(line) <= _MAX_HEADER_LENGTH):
+    in_item = bool(_ITEM.match(current[0]))
+    is_header = line.isupper() and _MIN_HEADER_LENGTH <= len(line) <= _MAX_HEADER_LENGTH
+    # inside an item only a callout header ends it; "LED" in a sentence does not
+    if _ITEM.match(line) or (is_header and (line in _CALLOUTS or not in_item)):
         return True
-    if _ITEM.match(current[0]):
+    if in_item:
         return False
     return current[-1].endswith(_SENTENCE_END) and line[0].isupper()
 
@@ -78,17 +96,16 @@ def split_blocks(page: int, text: str) -> list[Block]:
 def _continues_across_pages(first_line: str, last: Block) -> bool:
     """Does the next page's first line continue the previous page's last block?
 
-    Only when the block was cut mid-sentence and the line is not a new item or
-    header, and either the block is a list item or the line starts in lowercase.
-    A block is joined across one page break at most, so lines without sentence
-    ends (tables, indexes) cannot chain into one huge block.
+    Only when the block was cut mid-sentence (no sentence end), the line is not a
+    new item or header, and it starts in lowercase: a capital after an unfinished
+    line is more likely a new paragraph. A block is joined across one page break
+    at most, so lines without sentence ends (tables, indexes) cannot chain into
+    one huge block.
     """
     lines = last.text.splitlines()
     if len(last.pages) > 1 or lines[-1].endswith(_SENTENCE_END):
         return False
-    if _starts_block(first_line, lines):
-        return False
-    return bool(_ITEM.match(lines[0])) or first_line[0].islower()
+    return not _starts_block(first_line, lines) and first_line[0].islower()
 
 
 def _add_text(section: Section, page: int, text: str) -> None:
@@ -103,43 +120,79 @@ def _add_text(section: Section, page: int, text: str) -> None:
     if blocks and can_join:
         last, first = section.blocks[-1], blocks[0]
         if _continues_across_pages(first.text.splitlines()[0], last):
+            last_lines = last.text.splitlines()
+            last.line_pages = last.line_pages or [last.pages[0]] * len(last_lines)
+            last.line_pages += [page] * len(first.text.splitlines())
             last.text += "\n" + first.text
             last.pages.append(page)
             blocks = blocks[1:]
     section.blocks += blocks
 
 
+def _heading_paths(headings: list[Heading]) -> list[list[str]]:
+    """Section path of every heading, from the outline order.
+
+    Ancestors are tracked by their real level, so a skipped level (1, 3, 3)
+    still makes the two level-3 headings siblings.
+    """
+    ancestors: list[Heading] = []
+    paths: list[list[str]] = []
+    for heading in headings:
+        while ancestors and ancestors[-1].level >= heading.level:
+            ancestors.pop()
+        ancestors.append(heading)
+        paths.append([ancestor.title for ancestor in ancestors])
+    return paths
+
+
 def build_sections(pages: list[Page], headings: list[Heading]) -> list[Section]:
     """Cut the document at its outline headings.
 
-    A heading that cannot be found in the page text still opens a section at the
-    current position. Text before the first heading (cover, table of contents)
-    belongs to no section and is dropped. Without any headings (a PDF with no
+    The pages must be in increasing order and the outline in reading order (as
+    PDF bookmarks are). A heading is searched for after the previous one on its
+    page; one that cannot be found opens a section at the current position and
+    is logged. Text before the
+    first heading (cover, table of contents) belongs to no section and is
+    dropped. A heading on a page that is not in `pages` raises ValueError
+    instead of silently losing its section. Without any headings (a PDF with no
     bookmarks) the whole document becomes one section with an empty path.
     """
+    numbers = [page.page for page in pages]
+    if numbers != sorted(set(numbers)):
+        raise ValueError("pages must be unique and in increasing order")
     if not headings:
         section = Section([])
         for page in pages:
             _add_text(section, page.page, clean_page_text(page.text, page.page))
         return [section]
 
-    by_page: dict[int, list[Heading]] = defaultdict(list)
-    for heading in headings:
-        by_page[heading.page].append(heading)
+    by_page: dict[int, list[int]] = defaultdict(list)
+    for index, heading in enumerate(headings):
+        by_page[heading.page].append(index)
+    missing = sorted(set(by_page) - set(numbers))
+    if missing:
+        raise ValueError(
+            f"headings point to pages that are not in the document: {missing}"
+        )
 
+    paths = _heading_paths(headings)
     sections: list[Section] = []
-    path: list[str] = []
     current: Section | None = None
     for page in pages:
         text = clean_page_text(page.text, page.page)
         pos = 0
-        for heading in by_page[page.page]:
-            match = find_heading(heading.title, text, pos)
+        for index in by_page[page.page]:
+            match = find_heading(headings[index].title, text, pos)
+            if match is None:
+                logger.warning(
+                    "heading not found on page %d: %s", page.page, headings[index].title
+                )
             start = match.start() if match else pos
             if current:
                 _add_text(current, page.page, text[pos:start])
-            path = path[: heading.level - 1] + [heading.title]
-            current = Section(path, [Block([page.page], heading.title)])
+            current = Section(
+                paths[index], [Block([page.page], headings[index].title, heading=True)]
+            )
             sections.append(current)
             pos = match.end() if match else pos
         if current:
@@ -182,6 +235,39 @@ def merge_sections(
     return [(_common_prefix(paths), blocks) for paths, blocks in groups]
 
 
+def split_oversized_blocks(blocks: list[Block], target_tokens: int) -> list[Block]:
+    """Cut blocks bigger than the target at line boundaries.
+
+    A table of contents or an index has no sentence ends, so it forms one huge
+    block; lines are the next natural unit. A single line bigger than the target
+    stays whole. Headings are never split, so they keep their flag even when longer than the
+    target. Each piece
+    cites only the pages of its own lines; the callout state carries over.
+    """
+    result: list[Block] = []
+    for block in blocks:
+        if block.heading or _tokens([block]) <= target_tokens:
+            result.append(block)
+            continue
+        lines: list[str] = []
+        first = size = 0
+        for number, line in enumerate(block.text.splitlines()):
+            n = len(tokenize(line))
+            if lines and size + n > target_tokens:
+                result.append(_piece(block, lines, first, number))
+                lines, first, size = [], number, 0
+            lines.append(line)
+            size += n
+        result.append(_piece(block, lines, first, first + len(lines)))
+    return result
+
+
+def _piece(block: Block, lines: list[str], first: int, last: int) -> Block:
+    pages = block.pages_of(first, last)
+    line_pages = block.line_pages[first:last]
+    return Block(pages, "\n".join(lines), block.callout, line_pages=line_pages)
+
+
 def pack_blocks(
     blocks: list[Block], target_tokens: int, overlap_tokens: int
 ) -> list[list[Block]]:
@@ -190,16 +276,23 @@ def pack_blocks(
     When a chunk is full the next one starts with the last blocks of the
     previous one (up to overlap_tokens) so a step at the border is not lost.
     The overlap is cut back so it never pushes the chunk past the target; a
-    single block bigger than the target stays whole.
+    single block bigger than the target stays whole. A chunk that holds only
+    section headings is never closed, so a heading always travels with content.
     """
     chunks: list[list[Block]] = []
     current: list[Block] = []
     size = 0
     for block in blocks:
         n = _tokens([block])
-        if current and size + n > target_tokens:
+        if current and size + n > target_tokens and not all(b.heading for b in current):
+            carry: list[Block] = []  # trailing headings move on with their content
+            while current[-1].heading:
+                carry.insert(0, current.pop())
             chunks.append(current)
-            current = _overlap_tail(current, min(overlap_tokens, target_tokens - n))
+            tail = _overlap_tail(
+                current, min(overlap_tokens, target_tokens - n - _tokens(carry))
+            )
+            current = tail + carry
             size = _tokens(current)
         current.append(block)
         size += n
@@ -230,30 +323,37 @@ def mark_callouts(blocks: list[Block]) -> None:
         first_line = block.text.splitlines()[0]
         if first_line in _CALLOUTS:
             in_callout = True
-        elif not _ITEM.match(first_line):
+        elif block.heading or not _ITEM.match(first_line):
             in_callout = False
         block.callout = in_callout
+
+
+def _words(blocks: list[Block]) -> list[str]:
+    """Tokens of the blocks without the list markers at the start of lines."""
+    return [
+        word
+        for block in blocks
+        for line in block.text.splitlines()
+        for word in tokenize(_ITEM.sub("", line))
+    ]
 
 
 def classify(blocks: list[Block]) -> str:
     """Guess what kind of content a chunk holds.
 
     warning: mostly callout text (see mark_callouts);
-    specification: mostly numbers (list numbering excluded); procedure: two or more list items;
-    text: everything else.
+    specification: mostly numbers; procedure: two or more list items;
+    text: everything else. Heading lines do not count (their numbers look like
+    digits). List numbering ("1.", "▪") is not counted as a word.
     """
-    total = _tokens(blocks) or 1
-    callout_tokens = _tokens([block for block in blocks if block.callout])
+    body = [block for block in blocks if not block.heading] or blocks
+    words = _words(body)
+    total = len(words) or 1
+    callout_words = len(_words([block for block in body if block.callout]))
     items = sum(
-        bool(_ITEM.match(line)) for block in blocks for line in block.text.splitlines()
+        bool(_ITEM.match(line)) for block in body for line in block.text.splitlines()
     )
-    words = [
-        word
-        for block in blocks
-        for line in block.text.splitlines()
-        for word in tokenize(_ITEM.sub("", line))
-    ]
-    if callout_tokens / total >= 0.5:
+    if callout_words / total >= 0.5:
         return "warning"
     if sum(word.isdigit() for word in words) / total >= 0.3:
         return "specification"
@@ -265,13 +365,19 @@ def classify(blocks: list[Block]) -> str:
 def chunk_document(
     pages: list[Page], headings: list[Heading], config: ChunkingConfig
 ) -> list[Chunk]:
-    """Turn the manual into chunks that carry their section path and pages."""
+    """Turn the manual into chunks that carry their section path and pages.
+
+    Sections that hold nothing but their heading produce no chunk.
+    """
     overlap_tokens = int(config.target_tokens * config.overlap_ratio)
     chunks: list[Chunk] = []
     sections = build_sections(pages, headings)
     for path, blocks in merge_sections(sections, config.target_tokens):
         mark_callouts(blocks)
+        blocks = split_oversized_blocks(blocks, config.target_tokens)
         for group in pack_blocks(blocks, config.target_tokens, overlap_tokens):
+            if all(block.heading for block in group):
+                continue  # a section with a title and nothing under it
             chunks.append(
                 Chunk(
                     id=f"chunk-{len(chunks):04d}",

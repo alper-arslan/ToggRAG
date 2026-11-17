@@ -1,3 +1,5 @@
+import pytest
+
 from toggrag.chunking import (
     Block,
     Section,
@@ -10,6 +12,7 @@ from toggrag.chunking import (
     merge_sections,
     pack_blocks,
     split_blocks,
+    split_oversized_blocks,
 )
 from toggrag.config import ChunkingConfig
 from toggrag.models import Chunk, Heading, Page
@@ -62,6 +65,11 @@ def test_split_blocks_keeps_all_sentences_of_a_list_item_together():
         "1. Aracı durdurun.\nMotoru tamamen kapatın.",
         "2. Çıkın.",
     ]
+
+
+def test_split_blocks_short_all_caps_units_do_not_start_a_block():
+    assert len(split_blocks(1, "Hız 50\nKM\nile sınırlı")) == 1
+    assert len(split_blocks(1, "Metin\nNOT\nBir şey")) == 2
 
 
 def test_split_blocks_splits_after_sentence_end_only():
@@ -136,6 +144,32 @@ def test_build_sections_joins_a_list_item_that_runs_over_the_page_break():
     ]
     mark_callouts(blocks)
     assert [b.callout for b in blocks] == [False, True, True, True]
+
+
+def test_build_sections_does_not_glue_a_capitalised_paragraph_onto_an_item():
+    pages = [
+        Page(page=2, text="1 Giriş\n▪ Aracı durdurun"),
+        Page(page=3, text="Kontak açın"),
+    ]
+    sections = build_sections(pages, [Heading(level=1, title="1 Giriş", page=2)])
+    assert [b.text for b in sections[0].blocks] == [
+        "1 Giriş",
+        "▪ Aracı durdurun",
+        "Kontak açın",
+    ]
+
+
+def test_build_sections_raises_for_a_heading_on_a_missing_page():
+    pages = [Page(page=1, text="A"), Page(page=3, text="C")]
+    headings = [Heading(level=1, title="B", page=2)]
+    with pytest.raises(ValueError, match=r"\[2\]"):
+        build_sections(pages, headings)
+
+
+def test_build_sections_marks_only_the_heading_block():
+    alt = build_sections(_pages(), _headings())[1]
+    assert alt.blocks[0].heading
+    assert not any(b.heading for b in alt.blocks[1:])
 
 
 def test_build_sections_does_not_join_after_a_finished_sentence():
@@ -233,6 +267,91 @@ def test_mark_callouts_flags_header_and_items_under_it():
     assert [b.callout for b in blocks] == [False, True, True, False]
 
 
+def test_pack_blocks_keeps_a_heading_with_the_content_after_it():
+    heading = Block([1], "Başlık", heading=True)
+    big = Block([1], " ".join(["kelime"] * 50))
+    assert pack_blocks([heading, big], target_tokens=20, overlap_tokens=0) == [
+        [heading, big]
+    ]
+
+
+def test_split_oversized_blocks_cuts_at_line_boundaries():
+    text = "\n".join(["bir iki"] * 6)
+    block = Block([4, 5], text, callout=True)
+    pieces = split_oversized_blocks([block], target_tokens=5)
+    assert [p.text for p in pieces] == ["\n".join(["bir iki"] * 2)] * 3
+    assert all(p.pages == [4, 5] and p.callout for p in pieces)
+
+
+def test_split_oversized_blocks_cites_only_the_pages_of_each_piece():
+    block = Block(
+        [4, 5],
+        "\n".join(["bir iki"] * 4),
+        line_pages=[4, 4, 5, 5],
+    )
+    pieces = split_oversized_blocks([block], target_tokens=4)
+    assert [p.pages for p in pieces] == [[4], [5]]
+
+
+def test_split_oversized_blocks_keeps_all_pages_without_line_pages():
+    block = Block([4, 5], "\n".join(["bir iki"] * 4))
+    pieces = split_oversized_blocks([block], target_tokens=4)
+    assert [p.pages for p in pieces] == [[4, 5], [4, 5]]
+
+
+def test_split_oversized_blocks_slices_line_pages_and_spans_a_page_break():
+    block = Block([4, 5], "\n".join(["bir iki"] * 4), line_pages=[4, 5, 5, 5])
+    pieces = split_oversized_blocks([block], target_tokens=4)
+    assert [p.pages for p in pieces] == [[4, 5], [5]]
+    assert [p.line_pages for p in pieces] == [[4, 5], [5, 5]]
+
+
+def test_build_sections_records_the_page_of_every_line_of_a_joined_item():
+    pages = [
+        Page(page=1, text="▪ Birinci adım\nikinci satır"),
+        Page(page=2, text="devam eder."),
+    ]
+    (section,) = build_sections(pages, [])
+    assert section.blocks[0].pages == [1, 2]
+    assert section.blocks[0].line_pages == [1, 1, 2]
+
+
+def test_split_oversized_blocks_keeps_a_long_heading_whole():
+    heading = Block([1], "çok uzun bir başlık satırı burada", heading=True)
+    (result,) = split_oversized_blocks([heading], target_tokens=3)
+    assert result is heading
+
+
+def test_split_oversized_blocks_leaves_small_blocks_and_long_lines_alone():
+    small = Block([1], "bir iki")
+    long_line = Block([1], " ".join(["kelime"] * 9))
+    assert split_oversized_blocks([small, long_line], target_tokens=5) == [
+        small,
+        long_line,
+    ]
+
+
+def test_chunk_document_splits_a_huge_unpunctuated_block():
+    lines = "\n".join(f"madde {n}" for n in range(30))
+    pages = [Page(page=2, text=f"1 Giriş\n{lines}")]
+    chunks = chunk_document(
+        pages,
+        [Heading(level=1, title="1 Giriş", page=2)],
+        ChunkingConfig(target_tokens=10, overlap_ratio=0),
+    )
+    sizes = [len(c.text.split()) for c in chunks]
+    assert len(chunks) > 3
+    assert chunks[0].text.startswith("1 Giriş")
+    assert sizes[0] <= 10 + 2  # the heading travels with the first piece
+    assert all(size <= 10 for size in sizes[1:])
+
+
+def test_classify_ignores_list_numbering_in_both_counts():
+    plain = [Block([1], "aaa 5 bb\nccc 5 dd")]
+    numbered = [Block([1], "1. aaa 5 bb\n2. ccc 5 dd")]
+    assert classify(plain) == classify(numbered) == "specification"
+
+
 def test_classify_warning():
     blocks = [
         Block([1], "DİKKAT"),
@@ -274,6 +393,17 @@ def test_chunk_document_builds_chunks_with_pages_and_path():
     assert chunks[1].section_path == ["2 İkinci"]
 
 
+def test_chunk_document_skips_a_section_with_only_a_heading():
+    pages = [Page(page=2, text="1 Giriş\nMetin burada.\n2 Boş")]
+    headings = [
+        Heading(level=1, title="1 Giriş", page=2),
+        Heading(level=1, title="2 Boş", page=2),
+    ]
+    chunks = chunk_document(pages, headings, ChunkingConfig(target_tokens=3))
+    assert all("Boş" not in c.text for c in chunks)
+    assert chunks
+
+
 def test_chunk_document_without_headings_still_returns_chunks():
     chunks = chunk_document(_pages(), [], ChunkingConfig(target_tokens=100))
     assert chunks
@@ -290,3 +420,116 @@ def test_contextual_text_puts_section_path_first():
         content_type="text",
     )
     assert contextual_text(chunk) == "1 Giriş > 1.1 Alt\nMetin"
+
+
+def test_build_sections_siblings_after_a_level_jump_share_their_parent():
+    pages = [Page(page=1, text="Kök\nİlk\nMetin bir.\nİkinci\nMetin iki.")]
+    headings = [
+        Heading(level=1, title="Kök", page=1),
+        Heading(level=3, title="İlk", page=1),
+        Heading(level=3, title="İkinci", page=1),
+    ]
+    sections = build_sections(pages, headings)
+    assert [s.path for s in sections] == [
+        ["Kök"],
+        ["Kök", "İlk"],
+        ["Kök", "İkinci"],
+    ]
+
+
+def test_mark_callouts_ends_at_a_numbered_heading():
+    blocks = [
+        Block([1], "DİKKAT"),
+        Block([1], "▪ Kemer takın."),
+        Block([1], "2. Kullanım", heading=True),
+        Block([1], "1. Kapıyı açın."),
+    ]
+    mark_callouts(blocks)
+    assert [b.callout for b in blocks] == [True, True, False, False]
+
+
+def test_pack_blocks_moves_a_trailing_heading_to_the_next_chunk():
+    text = Block([1], " ".join(["a"] * 8))
+    heading = Block([1], "Başlık", heading=True)
+    big = Block([1], " ".join(["b"] * 12))
+    chunks = pack_blocks([text, heading, big], target_tokens=16, overlap_tokens=0)
+    assert chunks == [[text], [heading, big]]
+
+
+def test_classify_ignores_the_numbers_of_headings():
+    blocks = [Block([1], "3.1.2 Teknik", heading=True), Block([1], "Fren bakımı.")]
+    assert classify(blocks) == "text"
+
+
+def test_build_sections_keeps_the_hierarchy_when_the_outline_order_differs():
+    pages = [Page(page=1, text="Bölüm\nmetin."), Page(page=2, text="Kök\nmetin.")]
+    headings = [
+        Heading(level=1, title="Kök", page=2),
+        Heading(level=2, title="Bölüm", page=1),
+    ]
+    assert [s.path for s in build_sections(pages, headings)] == [
+        ["Kök", "Bölüm"],
+        ["Kök"],
+    ]
+
+
+def test_build_sections_keeps_text_before_a_missing_heading_with_it():
+    pages = [Page(page=1, text="alpha prose.\nPresent\nbeta prose.")]
+    headings = [
+        Heading(level=1, title="Absent", page=1),
+        Heading(level=1, title="Present", page=1),
+    ]
+    absent, present = build_sections(pages, headings)
+    assert [b.text for b in absent.blocks] == ["Absent", "alpha prose."]
+    assert [b.text for b in present.blocks] == ["Present", "beta prose."]
+
+
+def test_pack_blocks_puts_a_carried_heading_after_the_overlap():
+    old, small = Block([1], " ".join(["a"] * 12)), Block([1], "x y")
+    heading = Block([1], "Başlık", heading=True)
+    new = Block([1], " ".join(["b"] * 12))
+    chunks = pack_blocks([old, small, heading, new], target_tokens=16, overlap_tokens=2)
+    assert chunks[1] == [small, heading, new]
+
+
+def test_build_sections_logs_a_heading_missing_from_the_text(caplog):
+    pages = [Page(page=1, text="A\nmetin.")]
+    headings = [
+        Heading(level=1, title="A", page=1),
+        Heading(level=1, title="Z", page=1),
+    ]
+    with caplog.at_level("WARNING"):
+        build_sections(pages, headings)
+    assert "heading not found" in caplog.text
+
+
+def test_build_sections_rejects_unordered_pages():
+    pages = [Page(page=2, text="x"), Page(page=1, text="y")]
+    with pytest.raises(ValueError, match="increasing"):
+        build_sections(pages, [])
+
+
+def test_split_blocks_keeps_an_all_caps_word_inside_a_list_item():
+    blocks = split_blocks(1, "1. Düğmeye basın ve\nLED\nyanana kadar bekleyin.")
+    assert len(blocks) == 1
+    assert [b.text for b in split_blocks(1, "1. Basın\nDİKKAT\nSıcak.")][
+        1
+    ] == "DİKKAT\nSıcak."
+
+
+def test_a_year_or_street_number_is_not_a_list_item():
+    assert len(split_blocks(1, "bu iş\n2024. yılında bitti.")) == 1
+
+
+def test_build_sections_gives_repeated_titles_on_one_page_their_own_text():
+    pages = [Page(page=1, text="1 Ön\nÖzet\nbir.\n2 Arka\nÖzet\niki.")]
+    headings = [
+        Heading(level=1, title="1 Ön", page=1),
+        Heading(level=2, title="Özet", page=1),
+        Heading(level=1, title="2 Arka", page=1),
+        Heading(level=2, title="Özet", page=1),
+    ]
+    sections = build_sections(pages, headings)
+    assert [s.path for s in sections][1::2] == [["1 Ön", "Özet"], ["2 Arka", "Özet"]]
+    assert [b.text for b in sections[1].blocks] == ["Özet", "bir."]
+    assert [b.text for b in sections[3].blocks] == ["Özet", "iki."]
