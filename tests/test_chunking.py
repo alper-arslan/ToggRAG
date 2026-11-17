@@ -48,7 +48,7 @@ def test_split_blocks_starts_new_block_at_list_items():
         "1. Birinci adım",
         "2. İkinci adım",
     ]
-    assert all(b.page == 3 for b in blocks)
+    assert all(b.pages == [3] for b in blocks)
 
 
 def test_split_blocks_starts_new_block_at_callout_header():
@@ -102,10 +102,9 @@ def test_build_sections_sets_path_and_pages():
         ["2 İkinci"],
     ]
     alt = sections[1]
-    assert [(b.page, b.text) for b in alt.blocks] == [
-        (2, "1.1 Alt"),
-        (2, "Alt metni"),
-        (3, "devam eden alt metin"),
+    assert [(b.pages, b.text) for b in alt.blocks] == [
+        ([2], "1.1 Alt"),
+        ([2, 3], "Alt metni\ndevam eden alt metin"),
     ]
 
 
@@ -119,7 +118,48 @@ def test_build_sections_without_headings_keeps_all_text_in_one_section():
     assert len(sections) == 1
     assert sections[0].path == []
     assert any("Giriş metni." in b.text for b in sections[0].blocks)
-    assert sections[0].blocks[0].page == 1
+    assert 1 in sections[0].blocks[0].pages
+
+
+def test_build_sections_joins_a_list_item_that_runs_over_the_page_break():
+    pages = [
+        Page(page=2, text="1 Giriş\nDİKKAT\n▪ Kemer takın ve"),
+        Page(page=3, text="bağlantısını kontrol edin.\n▪ Yavaşlayın."),
+    ]
+    sections = build_sections(pages, [Heading(level=1, title="1 Giriş", page=2)])
+    blocks = sections[0].blocks
+    assert [(b.pages, b.text) for b in blocks] == [
+        ([2], "1 Giriş"),
+        ([2], "DİKKAT"),
+        ([2, 3], "▪ Kemer takın ve\nbağlantısını kontrol edin."),
+        ([3], "▪ Yavaşlayın."),
+    ]
+    mark_callouts(blocks)
+    assert [b.callout for b in blocks] == [False, True, True, True]
+
+
+def test_build_sections_does_not_join_after_a_finished_sentence():
+    pages = [Page(page=2, text="1 Giriş\nBitti."), Page(page=3, text="Yeni cümle")]
+    sections = build_sections(pages, [Heading(level=1, title="1 Giriş", page=2)])
+    assert [b.text for b in sections[0].blocks] == ["1 Giriş", "Bitti.", "Yeni cümle"]
+
+
+def test_build_sections_never_joins_text_into_the_heading_line():
+    pages = [Page(page=2, text="1 Giriş"), Page(page=3, text="metin devam eder")]
+    sections = build_sections(pages, [Heading(level=1, title="1 Giriş", page=2)])
+    assert [b.text for b in sections[0].blocks] == ["1 Giriş", "metin devam eder"]
+
+
+def test_build_sections_without_headings_joins_across_pages_too():
+    pages = [Page(page=1, text="1. Adım bir ve"), Page(page=2, text="devamı.")]
+    blocks = build_sections(pages, [])[0].blocks
+    assert [(b.pages, b.text) for b in blocks] == [([1, 2], "1. Adım bir ve\ndevamı.")]
+
+
+def test_build_sections_joins_across_one_page_break_at_most():
+    pages = [Page(page=n, text=f"satır {n} devam") for n in (1, 2, 3)]
+    blocks = build_sections(pages, [])[0].blocks
+    assert [b.pages for b in blocks] == [[1, 2], [3]]
 
 
 def test_build_sections_keeps_heading_that_is_not_found_in_text():
@@ -129,7 +169,7 @@ def test_build_sections_keeps_heading_that_is_not_found_in_text():
 
 
 def _section(path, *words):
-    return Section(path, [Block(1, " ".join(["kelime"] * n)) for n in words])
+    return Section(path, [Block([1], " ".join(["kelime"] * n)) for n in words])
 
 
 def test_merge_sections_joins_small_sections_of_the_same_chapter():
@@ -155,7 +195,7 @@ def test_merge_sections_respects_target_size():
 
 
 def _blocks(*sizes):
-    return [Block(1, " ".join([f"k{i}"] * n)) for i, n in enumerate(sizes)]
+    return [Block([1], " ".join([f"k{i}"] * n)) for i, n in enumerate(sizes)]
 
 
 def test_pack_blocks_never_splits_a_block():
@@ -184,23 +224,27 @@ def test_pack_blocks_overlap_never_pushes_a_chunk_past_the_target():
 
 def test_mark_callouts_flags_header_and_items_under_it():
     blocks = [
-        Block(1, "Metin devam."),
-        Block(1, "DİKKAT"),
-        Block(1, "▪ Kemer takın."),
-        Block(1, "Normal paragraf."),
+        Block([1], "Metin devam."),
+        Block([1], "DİKKAT"),
+        Block([1], "▪ Kemer takın."),
+        Block([1], "Normal paragraf."),
     ]
     mark_callouts(blocks)
     assert [b.callout for b in blocks] == [False, True, True, False]
 
 
 def test_classify_warning():
-    blocks = [Block(1, "DİKKAT"), Block(1, "▪ Kemer takın."), Block(1, "▪ Yavaşlayın.")]
+    blocks = [
+        Block([1], "DİKKAT"),
+        Block([1], "▪ Kemer takın."),
+        Block([1], "▪ Yavaşlayın."),
+    ]
     mark_callouts(blocks)
     assert classify(blocks) == "warning"
 
 
 def test_classify_warning_chunk_that_starts_after_the_callout_header():
-    blocks = [Block(1, "▪ Kemer takın."), Block(1, "▪ Yavaşlayın.")]
+    blocks = [Block([1], "▪ Kemer takın."), Block([1], "▪ Yavaşlayın.")]
     assert classify(blocks) == "procedure"
     for block in blocks:
         block.callout = True
@@ -208,16 +252,18 @@ def test_classify_warning_chunk_that_starts_after_the_callout_header():
 
 
 def test_classify_procedure():
-    blocks = [Block(1, "1. Kapıyı açın."), Block(1, "2. Anahtarı çevirin.")]
+    blocks = [Block([1], "1. Kapıyı açın."), Block([1], "2. Anahtarı çevirin.")]
     assert classify(blocks) == "procedure"
 
 
 def test_classify_specification():
-    assert classify([Block(1, "Boy 4515 mm\nEn 1863 mm\n1630 2600")]) == "specification"
+    assert (
+        classify([Block([1], "Boy 4515 mm\nEn 1863 mm\n1630 2600")]) == "specification"
+    )
 
 
 def test_classify_plain_text():
-    assert classify([Block(1, "Araç sessiz çalışır.")]) == "text"
+    assert classify([Block([1], "Araç sessiz çalışır.")]) == "text"
 
 
 def test_chunk_document_builds_chunks_with_pages_and_path():

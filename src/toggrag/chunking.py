@@ -7,7 +7,6 @@ from toggrag.models import Chunk, Heading, Page
 from toggrag.text import clean_page_text, tokenize
 
 _ITEM = re.compile(r"^(?:[▪•●■\-–]|\d+[.)])\s")
-_STEP = re.compile(r"^\d+[.)]\s")
 _SENTENCE_END = (".", ":", "!", "?")
 _CALLOUTS = {"UYARI", "DİKKAT", "TEHLİKE", "İKAZ"}
 _MAX_HEADER_LENGTH = 30
@@ -15,9 +14,12 @@ _MAX_HEADER_LENGTH = 30
 
 @dataclass
 class Block:
-    """A run of lines that stay together: a list item, a callout header, a paragraph."""
+    """A run of lines that stay together: a list item, a callout header, a paragraph.
 
-    page: int
+    A block that runs over a page break lists every page it touches.
+    """
+
+    pages: list[int]
     text: str
     callout: bool = False
 
@@ -34,8 +36,8 @@ def find_heading(title: str, text: str, start: int = 0) -> re.Match[str] | None:
     """Find a heading that fills its line(s), even if the PDF wrapped it.
 
     A longer title that only starts with the same words ("2.1 Güvenlik Talimatları"
-    for "2.1 Güvenlik") does not match. Whitespace inside the title is ignored, so "3.1.3 Kaybolması/Değiştirilmesi" also matches
-    "3.1.3 Kaybolması/\\nDeğiştirilmesi".
+    for "2.1 Güvenlik") does not match. Whitespace inside the title is ignored, so
+    "3.1.3 Kaybolması/Değiştirilmesi" also matches "3.1.3 Kaybolması/\\nDeğiştirilmesi".
     """
     letters = [re.escape(char) for char in title if not char.isspace()]
     pattern = re.compile(r"^" + r"\s*".join(letters) + r"[ \t]*$", re.MULTILINE)
@@ -65,12 +67,46 @@ def split_blocks(page: int, text: str) -> list[Block]:
         if not line:
             continue
         if current and _starts_block(line, current):
-            blocks.append(Block(page, "\n".join(current)))
+            blocks.append(Block([page], "\n".join(current)))
             current = []
         current.append(line)
     if current:
-        blocks.append(Block(page, "\n".join(current)))
+        blocks.append(Block([page], "\n".join(current)))
     return blocks
+
+
+def _continues_across_pages(first_line: str, last: Block) -> bool:
+    """Does the next page's first line continue the previous page's last block?
+
+    Only when the block was cut mid-sentence and the line is not a new item or
+    header, and either the block is a list item or the line starts in lowercase.
+    A block is joined across one page break at most, so lines without sentence
+    ends (tables, indexes) cannot chain into one huge block.
+    """
+    lines = last.text.splitlines()
+    if len(last.pages) > 1 or lines[-1].endswith(_SENTENCE_END):
+        return False
+    if _starts_block(first_line, lines):
+        return False
+    return bool(_ITEM.match(lines[0])) or first_line[0].islower()
+
+
+def _add_text(section: Section, page: int, text: str) -> None:
+    """Append a page's text to a section.
+
+    If the page starts in the middle of the section's last block (a list item or
+    paragraph that runs over the page break), the two are joined so the item is
+    not cut and keeps all its pages. A section's heading line is never joined.
+    """
+    blocks = split_blocks(page, text)
+    can_join = section.blocks and (len(section.blocks) > 1 or not section.path)
+    if blocks and can_join:
+        last, first = section.blocks[-1], blocks[0]
+        if _continues_across_pages(first.text.splitlines()[0], last):
+            last.text += "\n" + first.text
+            last.pages.append(page)
+            blocks = blocks[1:]
+    section.blocks += blocks
 
 
 def build_sections(pages: list[Page], headings: list[Heading]) -> list[Section]:
@@ -82,12 +118,10 @@ def build_sections(pages: list[Page], headings: list[Heading]) -> list[Section]:
     bookmarks) the whole document becomes one section with an empty path.
     """
     if not headings:
-        blocks = [
-            block
-            for page in pages
-            for block in split_blocks(page.page, clean_page_text(page.text, page.page))
-        ]
-        return [Section([], blocks)]
+        section = Section([])
+        for page in pages:
+            _add_text(section, page.page, clean_page_text(page.text, page.page))
+        return [section]
 
     by_page: dict[int, list[Heading]] = defaultdict(list)
     for heading in headings:
@@ -103,13 +137,13 @@ def build_sections(pages: list[Page], headings: list[Heading]) -> list[Section]:
             match = find_heading(heading.title, text, pos)
             start = match.start() if match else pos
             if current:
-                current.blocks += split_blocks(page.page, text[pos:start])
+                _add_text(current, page.page, text[pos:start])
             path = path[: heading.level - 1] + [heading.title]
-            current = Section(path, [Block(page.page, heading.title)])
+            current = Section(path, [Block([page.page], heading.title)])
             sections.append(current)
             pos = match.end() if match else pos
         if current:
-            current.blocks += split_blocks(page.page, text[pos:])
+            _add_text(current, page.page, text[pos:])
     return sections
 
 
@@ -242,7 +276,7 @@ def chunk_document(
                 Chunk(
                     id=f"chunk-{len(chunks):04d}",
                     text="\n".join(block.text for block in group),
-                    pages=sorted({block.page for block in group}),
+                    pages=sorted({page for block in group for page in block.pages}),
                     section_path=path,
                     content_type=classify(group),
                 )
