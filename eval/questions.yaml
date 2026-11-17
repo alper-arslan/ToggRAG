@@ -1,0 +1,28 @@
+# Gold set: a question and the manual pages that contain its answer.
+# A retrieved chunk counts as relevant when one of its pages is listed here.
+- question: Kaput nasıl açılır?
+  pages: [35, 36]
+- question: Yolcu hava yastığını nasıl devre dışı bırakırım?
+  pages: [26]
+- question: Kabin sigorta kutusu nerede bulunur?
+  pages: [176]
+- question: Cam yıkama sıvısı seviyesi düştüğünde ne yapmalıyım?
+  pages: [206]
+- question: Çocuk koltuğunu ISOFIX ile nasıl bağlarım?
+  pages: [20, 21]
+- question: Uzaktan kumandalı anahtarın pilini nasıl değiştiririm?
+  pages: [29]
+- question: Yokuş iniş kontrolü nasıl çalışır?
+  pages: [48]
+- question: Yokuş kalkış desteği ne işe yarar?
+  pages: [48]
+- question: Şarj kapağı açılmazsa ne yapmalıyım?
+  pages: [97]
+- question: 360 derece kamera görünümünü nasıl kapatırım?
+  pages: [60]
+- question: Lastik basıncı takip sistemi (TPMS) nasıl çalışır?
+  pages: [88, 89]
+- question: V2L kullanırken aşırı güç kullanımı mesajı çıkarsa ne yapmalıyım?
+  pages: [96]
+- question: Aracı kriko ile kaldırırken nelere dikkat etmeliyim?
+  pages: [190, 191]
