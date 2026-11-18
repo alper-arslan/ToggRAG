@@ -10,9 +10,22 @@ Pipeline: parse PDF -> clean -> chunk -> embed -> Qdrant + BM25 -> hybrid retrie
 
 ## Layout
 
-- `src/toggrag/`: `config.py` (pydantic settings), `models.py` (Chunk, Page, Heading), `pdf.py` (extraction), `text.py` (Turkish lowercase, tokenize, stem, page cleaning), `shared.py` (StrictModel base).
+- `src/toggrag/` (flow of a question: ingest -> retrieve -> answer):
+  - Foundations: `config.py` (pydantic settings), `models.py` (Chunk, Page, Heading, Citation, Answer), `shared.py` (StrictModel base), `text.py` (Turkish lowercase, tokenize, stem, page cleaning).
+  - Ingest: `pdf.py` (pages + bookmarks), `chunking.py` (sections -> chunks), `embeddings.py` (Embedder), `store.py` (Qdrant), `pipeline.py` (ingest, chunk persistence, RagPipeline).
+  - Retrieve: `bm25.py`, `fusion.py` (RRF), `rerank.py` (optional Reranker), `retrieval.py` (HybridRetriever with bm25/dense/hybrid modes).
+  - Answer: `llm.py` (LLM adapters), `answer.py` (grounded prompt, citation parsing).
+  - Interfaces: `cli.py` (`toggrag ingest|ask|eval|ui`), `ui.py` (Gradio), `evaluation.py` (Hit@k, Recall@k, MRR, faithfulness).
 - `config.yaml` holds tunables; secrets live only in `.env` (see `.env.example`).
-- `data/` is gitignored; the manual goes in `data/manual.pdf`.
+- `eval/questions.yaml` is the gold set (question + answer pages).
+- `data/` is gitignored; the manual goes in `data/manual.pdf`, the built index is written next to it.
+- `Dockerfile` and `docker-compose.yml` serve the chat page; run `toggrag ingest` on the host first.
+
+## Git rules
+
+- Ask the user before every `git push` and before opening a PR; approval for one push does not cover the next.
+- Before creating a PR, run the `code-reviewer` subagent (`.claude/agents/code-reviewer.md`) on the branch, show the user its findings, and fix or explain each Must fix item first.
+- Check `git branch --show-current` before changing anything; stage files by name; no attribution lines in commits or PRs.
 
 ## Setup
 
