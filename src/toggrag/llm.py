@@ -37,6 +37,7 @@ class OllamaLLM:
     ) -> None:
         self._model = model
         self._context_window = context_window
+        self._max_tokens = max_tokens
         self._options = {
             "num_ctx": context_window,
             "temperature": temperature,
@@ -57,18 +58,27 @@ class OllamaLLM:
                 ],
             },
         )
-        response.raise_for_status()
-        body = response.json()
-        if "message" not in body:
-            raise ValueError(
-                f"Ollama returned no message for model {self._model!r}: "
-                f"{body.get('error', body)}"
+        body = response.json() if response.content else {}
+        if response.is_error or "message" not in body:
+            detail = (
+                body.get("error", response.text) if isinstance(body, dict) else body
             )
-        if body.get("prompt_eval_count", 0) >= self._context_window:
+            raise RuntimeError(
+                f"Ollama failed for model {self._model!r} "
+                f"(HTTP {response.status_code}): {detail}"
+            )
+        # the window must hold the prompt and the answer
+        if body.get("prompt_eval_count", 0) + self._max_tokens >= self._context_window:
             logger.warning(
-                "prompt filled the %d-token context window; the start of it may "
-                "have been cut. Raise llm.context_window or lower retrieval.top_k",
+                "prompt and answer may not fit the %d-token context window, so the "
+                "start of the prompt may have been cut. Raise llm.context_window "
+                "or lower retrieval.final_top_k",
                 self._context_window,
+            )
+        if body.get("done_reason") == "length":
+            logger.warning(
+                "answer stopped at max_tokens=%d; raise llm.max_tokens",
+                self._max_tokens,
             )
         return body["message"]["content"]
 
@@ -164,7 +174,7 @@ def make_llm(settings: Settings) -> LLM:
     if config.provider == "ollama":
         return OllamaLLM(
             config.model,
-            config.base_url or _OLLAMA_URL,
+            (config.base_url or _OLLAMA_URL).rstrip("/").removesuffix("/v1"),
             config.context_window,
             config.temperature,
             config.max_tokens,

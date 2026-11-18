@@ -64,7 +64,7 @@ Any setting can also be overridden by an environment variable, e.g.
   silently cuts the start of a longer prompt, so `llm.context_window` (default
   8192) is sent with every request, and a warning is logged if a prompt still
   fills it. Five chunks plus the rules need roughly 5k tokens. For Ollama
-  `llm.base_url` is the server root (no `/v1`).
+  `llm.base_url` is the server root; a trailing `/v1` is dropped.
 - **Qdrant in local mode.** No server to run; the same code works against a
   Qdrant server later.
 

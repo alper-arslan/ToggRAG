@@ -37,22 +37,38 @@ def _ollama(handler, context_window=8192):
 
 def test_ollama_error_body_names_the_model():
     llm = _ollama(lambda request: httpx.Response(200, json={"error": "no model"}))
-    with pytest.raises(ValueError, match="'m'.*no model"):
+    with pytest.raises(RuntimeError, match="'m'.*no model"):
         llm.complete("sys", "soru")
 
 
-def test_ollama_http_error_is_raised():
-    llm = _ollama(lambda request: httpx.Response(404, json={"error": "x"}))
-    with pytest.raises(httpx.HTTPStatusError):
+def test_ollama_http_error_carries_the_server_message():
+    llm = _ollama(
+        lambda request: httpx.Response(404, json={"error": "model 'm' not found"})
+    )
+    with pytest.raises(RuntimeError, match="HTTP 404.*not found"):
         llm.complete("sys", "soru")
 
 
 def test_ollama_warns_when_the_prompt_fills_the_context_window(caplog):
-    reply = {"message": {"content": "y"}, "prompt_eval_count": 100}
-    llm = _ollama(lambda request: httpx.Response(200, json=reply), context_window=100)
+    reply = {"message": {"content": "y"}, "prompt_eval_count": 1}
+    llm = _ollama(lambda request: httpx.Response(200, json=reply), context_window=101)
     with caplog.at_level("WARNING"):
         llm.complete("sys", "soru")
     assert "context window" in caplog.text
+
+
+def test_ollama_warns_when_the_answer_was_cut_at_max_tokens(caplog):
+    reply = {"message": {"content": "y"}, "done_reason": "length"}
+    llm = _ollama(lambda request: httpx.Response(200, json=reply))
+    with caplog.at_level("WARNING"):
+        assert llm.complete("sys", "soru") == "y"
+    assert "max_tokens" in caplog.text
+
+
+def test_make_llm_drops_a_trailing_v1_from_the_ollama_url():
+    settings = Settings(llm={"provider": "ollama", "base_url": "http://box:11434/v1"})
+    assert str(make_llm(settings)._client.base_url).startswith("http://box:11434")
+    assert "/v1" not in str(make_llm(settings)._client.base_url)
 
 
 def test_make_llm_passes_the_ollama_settings_through():

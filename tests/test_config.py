@@ -123,7 +123,7 @@ class TestSettings:
         monkeypatch.setenv("LLM__MODEL", "other-model")
         settings = Settings()
         assert settings.llm.model == "other-model"
-        assert settings.llm.base_url == "http://localhost:11434"
+        assert settings.llm.base_url is None
         assert settings.llm.context_window == 8192
 
     def test_load_settings_reads_secret_from_dotenv(self, monkeypatch, tmp_path):
