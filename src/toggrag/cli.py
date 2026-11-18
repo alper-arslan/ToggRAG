@@ -34,6 +34,12 @@ def _eval(args: argparse.Namespace) -> None:
     run_eval(args.questions, args.faithfulness)
 
 
+def _ui(args: argparse.Namespace) -> None:
+    from toggrag.ui import launch
+
+    launch(args.host, args.port)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="toggrag")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -53,6 +59,11 @@ def main() -> None:
         "--faithfulness", action="store_true", help="also judge answers with the LLM"
     )
     evaluate.set_defaults(run=_eval)
+
+    ui = commands.add_parser("ui", help="start the chat page (needs the ui extra)")
+    ui.add_argument("--host", default="127.0.0.1")
+    ui.add_argument("--port", type=int, default=7860)
+    ui.set_defaults(run=_ui)
 
     args = parser.parse_args()
     args.run(args)
