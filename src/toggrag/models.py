@@ -49,3 +49,22 @@ class Heading(StrictModel):
     page: PositiveInt = Field(
         description="Page number (1-based) on which the heading appears"
     )
+
+
+class Citation(StrictModel):
+    """A source the answer relies on."""
+
+    number: PositiveInt = Field(description="Number used in the answer text, e.g. [2]")
+    pages: list[PositiveInt] = Field(
+        min_length=1, description="Manual pages of the source"
+    )
+    section_path: list[str] = Field(description="Heading hierarchy of the source")
+
+
+class Answer(StrictModel):
+    """A grounded answer to a question, with the sources it cites."""
+
+    text: str = Field(description="Answer text; cites sources as [1], [2], ...")
+    citations: list[Citation] = Field(
+        description="Sources actually cited in the text; empty when the manual has no answer"
+    )
