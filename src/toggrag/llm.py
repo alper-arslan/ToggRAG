@@ -1,3 +1,4 @@
+import logging
 from typing import Protocol
 
 import httpx
@@ -5,6 +6,10 @@ import httpx
 from toggrag.config import Settings
 
 _ANTHROPIC_URL = "https://api.anthropic.com"
+_OLLAMA_URL = "http://localhost:11434"
+_OPENAI_URL = "https://api.openai.com/v1"
+
+logger = logging.getLogger(__name__)
 
 
 class LLM(Protocol):
@@ -13,8 +18,73 @@ class LLM(Protocol):
     def complete(self, system: str, user: str) -> str: ...
 
 
+class OllamaLLM:
+    """Ollama's native chat endpoint.
+
+    Used instead of its OpenAI-compatible one because only the native API lets
+    each request set the context window (num_ctx). Ollama's default window is
+    2048 tokens, and a longer prompt is cut at the start without any error.
+    """
+
+    def __init__(
+        self,
+        model: str,
+        base_url: str,
+        context_window: int,
+        temperature: float,
+        max_tokens: int,
+        client: httpx.Client | None = None,
+    ) -> None:
+        self._model = model
+        self._context_window = context_window
+        self._max_tokens = max_tokens
+        self._options = {
+            "num_ctx": context_window,
+            "temperature": temperature,
+            "num_predict": max_tokens,
+        }
+        self._client = client or httpx.Client(base_url=base_url, timeout=300)
+
+    def complete(self, system: str, user: str) -> str:
+        response = self._client.post(
+            "/api/chat",
+            json={
+                "model": self._model,
+                "stream": False,
+                "options": self._options,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            },
+        )
+        body = response.json() if response.content else {}
+        if response.is_error or "message" not in body:
+            detail = (
+                body.get("error", response.text) if isinstance(body, dict) else body
+            )
+            raise RuntimeError(
+                f"Ollama failed for model {self._model!r} "
+                f"(HTTP {response.status_code}): {detail}"
+            )
+        # the window must hold the prompt and the answer
+        if body.get("prompt_eval_count", 0) + self._max_tokens >= self._context_window:
+            logger.warning(
+                "prompt and answer may not fit the %d-token context window, so the "
+                "start of the prompt may have been cut. Raise llm.context_window "
+                "or lower retrieval.final_top_k",
+                self._context_window,
+            )
+        if body.get("done_reason") == "length":
+            logger.warning(
+                "answer stopped at max_tokens=%d; raise llm.max_tokens",
+                self._max_tokens,
+            )
+        return body["message"]["content"]
+
+
 class OpenAICompatibleLLM:
-    """Chat completions endpoint shared by Ollama, OpenAI and many other servers."""
+    """Chat completions endpoint of OpenAI and compatible servers (vLLM, ...)."""
 
     def __init__(
         self,
@@ -101,13 +171,21 @@ def make_llm(settings: Settings) -> LLM:
             config.max_tokens,
             settings.anthropic_api_key.get_secret_value(),
         )
+    if config.provider == "ollama":
+        return OllamaLLM(
+            config.model,
+            (config.base_url or _OLLAMA_URL).rstrip("/").removesuffix("/v1"),
+            config.context_window,
+            config.temperature,
+            config.max_tokens,
+        )
     key = settings.openai_api_key
-    if config.provider == "openai" and key is None:
+    if key is None:
         raise ValueError("OPENAI_API_KEY is not set")
     return OpenAICompatibleLLM(
         config.model,
-        config.base_url,
+        config.base_url or _OPENAI_URL,
         config.temperature,
         config.max_tokens,
-        key.get_secret_value() if key else None,
+        key.get_secret_value(),
     )

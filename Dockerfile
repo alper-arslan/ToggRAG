@@ -14,7 +14,7 @@ RUN uv sync --locked --no-dev --extra ui
 
 # The manual and the index live in ./data, mounted at run time (see docker-compose.yml).
 ENV EMBEDDING__BASE_URL=http://host.docker.internal:11434 \
-    LLM__BASE_URL=http://host.docker.internal:11434/v1
+    LLM__BASE_URL=http://host.docker.internal:11434
 
 EXPOSE 7860
 CMD ["uv", "run", "--no-sync", "toggrag", "ui", "--host", "0.0.0.0"]

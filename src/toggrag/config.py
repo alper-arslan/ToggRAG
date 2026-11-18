@@ -100,9 +100,21 @@ class LLMConfig(StrictModel):
         default="ollama", description="Adapter that serves the LLM."
     )
     model: str = Field(default="qwen2.5:7b", description="LLM model name.")
-    base_url: str = Field(
-        default="http://localhost:11434/v1",
-        description="Server URL for HTTP providers (OpenAI-compatible endpoint).",
+    base_url: str | None = Field(
+        default=None,
+        description=(
+            "Server URL. Ollama: the server root (default http://localhost:11434); "
+            "openai: an OpenAI-compatible /v1 URL (default the OpenAI API)."
+        ),
+    )
+    context_window: int = Field(
+        default=8192,
+        gt=0,
+        description=(
+            "Prompt window in tokens, sent to Ollama as num_ctx. Ollama's own default "
+            "is 2048 and silently cuts the start of a longer prompt, which here holds "
+            "the rules and the best chunks."
+        ),
     )
     temperature: float = Field(
         default=0.0, ge=0, le=2, description="Sampling temperature; 0 is deterministic."
