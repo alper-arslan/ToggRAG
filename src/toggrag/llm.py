@@ -1,3 +1,4 @@
+import logging
 from typing import Protocol
 
 import httpx
@@ -7,6 +8,8 @@ from toggrag.config import Settings
 _ANTHROPIC_URL = "https://api.anthropic.com"
 _OLLAMA_URL = "http://localhost:11434"
 _OPENAI_URL = "https://api.openai.com/v1"
+
+logger = logging.getLogger(__name__)
 
 
 class LLM(Protocol):
@@ -33,6 +36,7 @@ class OllamaLLM:
         client: httpx.Client | None = None,
     ) -> None:
         self._model = model
+        self._context_window = context_window
         self._options = {
             "num_ctx": context_window,
             "temperature": temperature,
@@ -54,11 +58,23 @@ class OllamaLLM:
             },
         )
         response.raise_for_status()
-        return response.json()["message"]["content"]
+        body = response.json()
+        if "message" not in body:
+            raise ValueError(
+                f"Ollama returned no message for model {self._model!r}: "
+                f"{body.get('error', body)}"
+            )
+        if body.get("prompt_eval_count", 0) >= self._context_window:
+            logger.warning(
+                "prompt filled the %d-token context window; the start of it may "
+                "have been cut. Raise llm.context_window or lower retrieval.top_k",
+                self._context_window,
+            )
+        return body["message"]["content"]
 
 
 class OpenAICompatibleLLM:
-    """Chat completions endpoint shared by Ollama, OpenAI and many other servers."""
+    """Chat completions endpoint of OpenAI and compatible servers (vLLM, ...)."""
 
     def __init__(
         self,

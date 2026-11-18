@@ -62,7 +62,9 @@ Any setting can also be overridden by an environment variable, e.g.
   API; other adapters speak the OpenAI chat format (OpenAI, vLLM...) or the
   Anthropic Messages API. Ollama's default context window is 2048 tokens and it
   silently cuts the start of a longer prompt, so `llm.context_window` (default
-  8192) is sent with every request. Five chunks plus the rules need about 4.7k.
+  8192) is sent with every request, and a warning is logged if a prompt still
+  fills it. Five chunks plus the rules need roughly 5k tokens. For Ollama
+  `llm.base_url` is the server root (no `/v1`).
 - **Qdrant in local mode.** No server to run; the same code works against a
   Qdrant server later.
 
